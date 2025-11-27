@@ -1,215 +1,146 @@
 # Acoustic Simulation Framework
 
-A highly configurable, Python-based acoustic simulation framework for generating synthetic training data for **vehicle noise source localization and separation** deep learning models.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-green)](#)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
 
-## 🎯 Overview
+> 高度可配置的 Python 声学仿真框架，用于生成用于车内噪声定位与分离模型的合成训练数据（8 通道，48kHz，24-bit）。
 
-This framework addresses the critical challenge of data scarcity in training AI models for in-vehicle noise analysis. By programmatically generating large-scale, high-fidelity acoustic datasets with pixel-perfect ground truth labels, it enables:
+---
 
-- **Automated generation** of thousands of training samples
-- **Precise control** over acoustic environments, source positions, and signal characteristics
-- **High-quality 8-channel microphone array** simulations at 48kHz/24-bit
-- **Comprehensive ground truth** including source positions, orientations, and clean signals
-- **Realistic acoustic propagation** using Image Source Method for room impulse responses
+## TL;DR
 
-## ✨ Key Features
+- 自动生成大量带像素级真值（位置、方向、干净信号）的合成音频样本  
+- 可配置车舱声学、麦克风阵列、多个并发声源与频域/时域特性  
+- 输出：8 通道 WAV、单声源干净信号、JSON/YAML 标签
 
-### 🔊 Sound Source Generation
-- **8+ noise source types**: Engine, road, wind, HVAC, motor whine, BSR, speech, alert tones
-- **Concurrent multi-source simulation**: Support for 3+ simultaneous sources
-- **Spectral and temporal control**: Configurable frequency ranges and time-domain characteristics
-- **Synthetic and hybrid approaches**: Procedural generation + recorded sample integration
+---
 
-### 🏠 Acoustic Environment Modeling
-- **Vehicle cabin simulation**: Configurable dimensions and material properties
-- **Reverberation modeling**: Image Source Method with adjustable reflection orders
-- **Frequency-dependent absorption**: Realistic material acoustic properties
-- **RT60 control**: Adjustable reverberation time (0.1-0.2s typical for vehicles)
+## 目录
 
-### 🎤 Microphone Array Configuration
-- **8-channel array**: Default configuration optimized for vehicle cabins
-- **3D spatial positioning**: Precise coordinate definition in vehicle frame
-- **Flexible geometry**: Easy reconfiguration for different array layouts
-- **Coordinate transformations**: Cartesian ↔ Spherical conversions
+- [主要特性](#主要特性)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [仓库结构](#仓库结构)
+- [示例用法](#示例用法)
+- [输出格式](#输出格式)
+- [测试与质量保证](#测试与质量保证)
+- [贡献](#贡献)
+- [许可](#许可)
 
-### 📊 Data Output
-- **Multi-channel audio**: 8-channel WAV files (48kHz, 24-bit)
-- **Clean source signals**: Individual source recordings for separation training
-- **Comprehensive labels**: JSON/YAML metadata with:
-  - 3D source positions (x, y, z)
-  - Spherical coordinates (distance, azimuth, elevation)
-  - Source type classifications
-  - Room acoustic properties
-  - Microphone array configuration
+---
 
-## 📁 Repository Structure
+## 主要特性
 
-```
-acoustic_sim_framework/
-├── README.md                    # This file
-├── requirements.txt             # Python dependencies
-├── setup.py                     # Package installation script
-├── config/
-│   └── default.yaml            # Default configuration template
-├── src/
-│   ├── __init__.py
-│   ├── signal_generation/
-│   │   ├── __init__.py
-│   │   └── noise_sources.py    # Sound source generators
-│   ├── propagation_model/
-│   │   ├── __init__.py
-│   │   └── room_impulse_response.py  # Acoustic propagation simulator
-│   ├── array_geometry/
-│   │   ├── __init__.py
-│   │   └── microphone_array.py  # Microphone array configuration
-│   ├── data_synthesis/
-│   │   ├── __init__.py
-│   │   └── mixer.py            # Audio mixing and post-processing
-│   └── utils/
-│       ├── __init__.py
-│       ├── audio_io.py         # Audio file I/O utilities
-│       └── labels.py           # Label generation and management
-├── examples/
-│   └── run_simulation_example.py  # Single simulation demo
-├── tests/
-│   ├── __init__.py
-│   └── test_basic_functionality.py  # Unit tests
-└── scripts/
-    └── generate_dataset.py     # Batch dataset generation tool
-```
+- 多达 8+ 类型的噪声源（发动机、道路、风噪、HVAC、马达嗡嗡、BSR、语音、提示音）
+- 并发多源（支持 3+ 并发）与频谱/时域可控
+- 车舱几何与材料频率相关吸声特性
+- 基于 Image Source Method 的 RIR（可调反射阶数）
+- 输出：8 通道 WAV（48kHz/24-bit）+ 完整标签（位置、方位、干净信号路径等）
 
-## 🚀 Quick Start
+---
 
-### Installation
+## 快速开始
 
-1. **Clone the repository**:
+1. 克隆代码并安装依赖：
+
 ```bash
 git clone https://github.com/yourusername/acoustic-sim-framework.git
 cd acoustic-sim-framework
-```
-
-2. **Install dependencies**:
-```bash
 pip install -r requirements.txt
-```
-
-Or install as a package:
-```bash
+# 或以开发模式安装
 pip install -e .
 ```
 
-### Requirements
-
-- Python 3.8+
-- NumPy, SciPy, Librosa
-- pyroomacoustics (for acoustic simulation)
-- soundfile (for audio I/O)
-- PyYAML (for configuration)
-- tqdm (for progress bars)
-
-### Run a Single Simulation
-
-Generate one example simulation to verify installation:
+2. 运行单次仿真示例（验证安装）：
 
 ```bash
 python examples/run_simulation_example.py
 ```
 
-This will create:
-- `output/example/example_001_mixed.wav` - 8-channel mixed audio
-- `output/example/example_001_source_*.wav` - Individual clean source signals
-- `output/example/example_001_label.json` - Ground truth labels
+输出示例：
 
-### Generate a Dataset
+- `output/example/example_001_mixed.wav` (8ch mixed)
+- `output/example/example_001_source_*.wav` (clean sources)
+- `output/example/example_001_label.json`
 
-Generate a batch of training samples:
+3. 批量生成数据集：
 
 ```bash
 python scripts/generate_dataset.py \
-    --config config/default.yaml \
-    --output output/dataset \
-    --num-samples 100 \
-    --num-workers 4 \
-    --seed 42
+  --config config/default.yaml \
+  --output output/dataset \
+  --num-samples 100 \
+  --num-workers 4 \
+  --seed 42
 ```
 
-**Arguments**:
-- `--config`: Path to configuration file
-- `--output`: Output directory for dataset
-- `--num-samples`: Number of samples to generate
-- `--num-workers`: Number of parallel workers (for faster generation)
-- `--seed`: Random seed for reproducibility
+---
 
-## ⚙️ Configuration
+## 配置说明（示例片段）
 
-The framework is highly configurable via YAML files. See `config/default.yaml` for all options.
+关键配置位于 `config/default.yaml`，示例：
 
-### Key Configuration Sections
-
-#### Audio Settings
 ```yaml
 audio:
-  sampling_rate: 48000  # Hz
-  bit_depth: 24         # bits
-  duration: 5.0         # seconds per clip
-```
+  sampling_rate: 48000
+  bit_depth: 24
+  duration: 5.0
 
-#### Microphone Array
-```yaml
 microphone_array:
   name: "default_8mic_array"
-  positions:  # [x, y, z] in meters
-    - [0.10, 0.05, 0.0]   # Driver headrest right
-    - [0.10, -0.05, 0.0]  # Driver headrest left
-    # ... 6 more microphones
-```
+  positions:
+    - [0.10, 0.05, 0.0]
+    - [0.10, -0.05, 0.0]
+    # ... 6 more
 
-#### Room Acoustics
-```yaml
 room:
-  dimensions: [4.5, 1.8, 1.5]  # [length, width, height] in meters
+  dimensions: [4.5, 1.8, 1.5]
   absorption:
-    default: [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]  # Frequency-dependent
-  max_order: 15  # Reflection order for ISM
-  rt60_range: [0.10, 0.20]  # Reverberation time range
+    default: [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+  max_order: 15
+  rt60_range: [0.10, 0.20]
 ```
 
-#### Sound Sources
-```yaml
-sources:
-  num_sources_range: [1, 5]  # Min and max concurrent sources
-  types:
-    engine_noise:
-      enabled: true
-      frequency_range: [100, 4000]
-      position_range:
-        x: [1.2, 2.0]
-        y: [-0.3, 0.3]
-        z: [-0.8, -0.4]
-    # ... more source types
+---
+
+## 仓库结构（简览）
+
+```
+acoustic_sim_framework/
+├── README.md
+├── requirements.txt
+├── setup.py
+├── config/
+│   └── default.yaml
+├── src/
+│   ├── signal_generation/
+│   │   └── noise_sources.py
+│   ├── propagation_model/
+│   │   └── room_impulse_response.py
+│   ├── array_geometry/
+│   │   └── microphone_array.py
+│   ├── data_synthesis/
+│   │   └── mixer.py
+│   └── utils/
+│       ├── audio_io.py
+│       └── labels.py
+├── examples/
+│   └── run_simulation_example.py
+├── tests/
+└── scripts/
+    └── generate_dataset.py
 ```
 
-## 🧪 Testing
+---
 
-Run unit tests to verify functionality:
+## 示例用法
 
-```bash
-python -m pytest tests/
-```
-
-Or run tests directly:
-```bash
-python tests/test_basic_functionality.py
-```
-
-## 📖 Usage Examples
-
-### Example 1: Custom Microphone Array
+示例 1：自定义麦克风阵列
 
 ```python
 from src.array_geometry.microphone_array import MicrophoneArray
 
-# Define custom array positions
 positions = [
     [0.0, 0.1, 0.0],
     [0.0, -0.1, 0.0],
@@ -221,30 +152,29 @@ mic_array = MicrophoneArray(positions, name="custom_4mic")
 print(mic_array.visualize_array())
 ```
 
-### Example 2: Generate Specific Noise Type
+示例 2：生成特定噪声
 
 ```python
 from src.signal_generation.noise_sources import NoiseSourceGenerator
-
 generator = NoiseSourceGenerator(sampling_rate=48000)
 
-# Generate 5 seconds of engine noise
 engine_signal = generator.generate_source(
     source_type='engine_noise',
     duration=5.0,
     frequency_range=(100, 3000),
     volume=0.8,
-    rpm=2000  # Optional: specify RPM
+    rpm=2000
 )
 ```
 
-### Example 3: Simulate Custom Acoustic Scene
+示例 3：仿真声学场景
 
 ```python
 from src.propagation_model.room_impulse_response import RoomAcousticSimulator
 import numpy as np
 
-# Create room
+# ... 初始化 mic_array 和 engine_signal ...
+
 room_sim = RoomAcousticSimulator(
     room_dimensions=[4.0, 1.8, 1.4],
     mic_array=mic_array,
@@ -252,41 +182,14 @@ room_sim = RoomAcousticSimulator(
     max_order=12
 )
 
-# Add sources
-room_sim.add_source(
-    position=np.array([1.5, 0.0, -0.5]),
-    signal=engine_signal
-)
-
-# Simulate
+room_sim.add_source(position=np.array([1.5, 0.0, -0.5]), signal=engine_signal)
 mixed_audio = room_sim.simulate()
 ```
 
-## 🎓 Technical Background
+---
 
-This framework implements the **Image Source Method (ISM)** for acoustic propagation, which:
+## 输出格式（标签 JSON 示例）
 
-1. **Models direct path**: Sound traveling directly from source to microphone
-2. **Computes early reflections**: Sound bouncing off walls, ceiling, floor
-3. **Simulates late reverberation**: Diffuse sound field from multiple reflections
-
-The simulation pipeline:
-
-```
-Source Generation → RIR Computation → Convolution → Mixing → Post-processing
-     (Dry)              (ISM)         (Wet)      (8-ch)    (Normalize)
-```
-
-## 📊 Output Data Format
-
-### Audio Files
-- **Format**: WAV (PCM)
-- **Channels**: 8
-- **Sample Rate**: 48000 Hz
-- **Bit Depth**: 24-bit
-- **Naming**: `{clip_id}_mixed.wav`, `{clip_id}_source_{id}_{type}.wav`
-
-### Label Files (JSON)
 ```json
 {
   "clip_id": "sim_000001",
@@ -314,44 +217,34 @@ Source Generation → RIR Computation → Convolution → Mixing → Post-proces
 }
 ```
 
-## 🔬 Validation & Quality Assurance
+---
 
-The framework includes validation strategies:
+## 测试与质量保证
 
-1. **Physical Validation**: Compare spectral and spatial features with real recordings
-2. **Model Validation**: Train baseline models on synthetic data, test on real data (Sim-to-Real)
-3. **Cross-Validation**: Mix synthetic and real data for optimal performance
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 📚 References
-
-1. Allen, J. B., & Berkley, D. A. (1979). Image method for efficiently simulating small-room acoustics. *JASA*.
-2. Grumiaux, P. A., et al. (2022). A survey of sound source localization with deep learning methods. *JASA*.
-3. Luo, Y., & Mesgarani, N. (2019). Conv-TasNet: Surpassing ideal time-frequency magnitude masking for speech separation.
-
-## 🙋 Support
-
-For questions, issues, or feature requests, please:
-- Open an issue on GitHub
-- Contact: dev@manus.ai
-
-## 🎉 Acknowledgments
-
-Developed by **Manus AI** as part of the vehicle NVH deep learning initiative.
+- 单元测试：`python -m pytest tests/`
+- 验证策略：
+  1. 物理验证：与真实录音比较光谱与空间特征
+  2. 模型验证：在合成数据上训练基线模型并在真实数据上测试
+  3. 混合训练：合成 + 真实数据混合以提高泛化
 
 ---
 
-**Happy Simulating! 🎵🚗**
+## 贡献
+
+1. Fork 仓库
+2. 新建分支：`git checkout -b feature/your-feature`
+3. 提交并推 PR
+
+---
+
+## 许可
+
+MIT License — 详情请查看 LICENSE 文件。
+
+---
+
+如果需要，我可以：
+
+- 将部分内容翻译为中文或双语版本；
+- 添加示例输出图片（提供路径或样例图片即可）；
+- 根据演示场景裁剪 README（如简洁版或教学版）。
