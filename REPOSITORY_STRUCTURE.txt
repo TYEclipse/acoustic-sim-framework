@@ -1,0 +1,35 @@
+.
+├── LICENSE
+├── README.md
+├── REPOSITORY_STRUCTURE.txt
+├── config
+│   └── default.yaml
+├── examples
+│   └── run_simulation_example.py
+├── requirements.txt
+├── scripts
+│   └── generate_dataset.py
+├── setup.py
+├── src
+│   ├── __init__.py
+│   ├── array_geometry
+│   │   ├── __init__.py
+│   │   └── microphone_array.py
+│   ├── data_synthesis
+│   │   ├── __init__.py
+│   │   └── mixer.py
+│   ├── propagation_model
+│   │   ├── __init__.py
+│   │   └── room_impulse_response.py
+│   ├── signal_generation
+│   │   ├── __init__.py
+│   │   └── noise_sources.py
+│   └── utils
+│       ├── __init__.py
+│       ├── audio_io.py
+│       └── labels.py
+└── tests
+    ├── __init__.py
+    └── test_basic_functionality.py
+
+10 directories, 22 files

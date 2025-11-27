@@ -1,0 +1,144 @@
+# ============================================================================
+# Acoustic Simulation Framework - Default Configuration
+# ============================================================================
+
+# Audio Settings
+audio:
+  sampling_rate: 48000  # Hz
+  bit_depth: 24         # bits
+  duration: 5.0         # seconds per simulation clip
+
+# Microphone Array Configuration
+# Coordinates in vehicle coordinate system (meters)
+# Origin: Driver's headrest center
+# X: forward, Y: left, Z: up
+microphone_array:
+  name: "default_8mic_array"
+  positions:
+    - [0.10, 0.05, 0.0]    # Mic 1: Driver headrest right
+    - [0.10, -0.05, 0.0]   # Mic 2: Driver headrest left
+    - [-0.10, 0.05, 0.0]   # Mic 3: Reserved
+    - [-0.10, -0.05, 0.0]  # Mic 4: Reserved
+    - [0.50, 0.80, 0.3]    # Mic 5: Front passenger A-pillar
+    - [0.50, -0.80, 0.3]   # Mic 6: Driver A-pillar
+    - [-1.20, 0.80, 0.2]   # Mic 7: Rear right C-pillar
+    - [-1.20, -0.80, 0.2]  # Mic 8: Rear left C-pillar
+
+# Room Acoustic Properties
+room:
+  # Vehicle cabin dimensions [length, width, height] in meters
+  dimensions: [4.5, 1.8, 1.5]
+  
+  # Wall absorption coefficients (frequency-dependent)
+  # Format: [125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz]
+  absorption:
+    default: [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+  
+  # Maximum order of reflections for image source method
+  max_order: 15
+  
+  # Target RT60 range (reverberation time in seconds)
+  rt60_range: [0.10, 0.20]
+
+# Sound Source Configuration
+sources:
+  # Number of concurrent sources per simulation
+  num_sources_range: [1, 5]  # Min and max number of sources
+  
+  # Available source types and their properties
+  types:
+    engine_noise:
+      enabled: true
+      frequency_range: [100, 4000]  # Hz
+      position_range:
+        x: [1.2, 2.0]
+        y: [-0.3, 0.3]
+        z: [-0.8, -0.4]
+    
+    road_noise:
+      enabled: true
+      frequency_range: [100, 2000]
+      position_range:
+        x: [-0.5, 0.5]
+        y: [-0.9, 0.9]
+        z: [-1.0, -0.7]
+    
+    wind_noise:
+      enabled: true
+      frequency_range: [500, 8000]
+      position_range:
+        x: [0.5, 1.5]
+        y: [-1.0, 1.0]
+        z: [0.0, 0.5]
+    
+    hvac_noise:
+      enabled: true
+      frequency_range: [200, 6000]
+      position_range:
+        x: [0.8, 1.2]
+        y: [-0.2, 0.2]
+        z: [-0.3, 0.1]
+    
+    motor_whine:
+      enabled: true
+      frequency_range: [2000, 16000]
+      position_range:
+        x: [1.5, 2.2]
+        y: [-0.4, 0.4]
+        z: [-0.6, -0.2]
+    
+    bsr_noise:
+      enabled: true
+      frequency_range: [500, 5000]
+      position_range:
+        x: [-1.5, 1.5]
+        y: [-0.9, 0.9]
+        z: [-0.5, 0.5]
+    
+    speech:
+      enabled: true
+      frequency_range: [200, 8000]
+      position_range:
+        x: [-0.5, 0.5]
+        y: [-0.8, 0.8]
+        z: [-0.2, 0.2]
+    
+    alert_tone:
+      enabled: true
+      frequency_range: [800, 4000]
+      position_range:
+        x: [0.5, 1.0]
+        y: [-0.3, 0.3]
+        z: [0.0, 0.3]
+  
+  # Volume/SNR control
+  snr_range: [5, 25]  # dB, signal-to-noise ratio range
+
+# Background Noise
+background:
+  enabled: true
+  level: -40  # dB relative to source signals
+  type: "pink"  # Options: "white", "pink", "brown"
+
+# Data Generation Settings
+generation:
+  # Output directory structure
+  output_dir: "./output/dataset"
+  
+  # Number of samples to generate
+  num_samples: 100
+  
+  # Random seed for reproducibility
+  random_seed: 42
+  
+  # Save individual source signals
+  save_clean_sources: true
+  
+  # Save mixed signal
+  save_mixed: true
+  
+  # Metadata format
+  metadata_format: "json"  # Options: "json", "yaml"
+  
+  # Parallel processing
+  num_workers: 4

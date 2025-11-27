@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""
+Dataset Generation Script
+
+This script automates the generation of large-scale acoustic datasets
+for training deep learning models in vehicle noise source localization
+and separation tasks.
+"""
+
+import sys
+import os
+import argparse
+import yaml
+import numpy as np
+from tqdm import tqdm
+from datetime import datetime
+import multiprocessing as mp
+from functools import partial
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.signal_generation.noise_sources import NoiseSourceGenerator
+from src.array_geometry.microphone_array import MicrophoneArray
+from src.propagation_model.room_impulse_response import RoomAcousticSimulator
+from src.data_synthesis.mixer import AudioMixer
+from src.utils.audio_io import write_audio
+from src.utils.labels import LabelGenerator, create_dataset_manifest
+
+
+class DatasetGenerator:
+    """
+    Automated dataset generator for acoustic simulations.
+    """
+    
+    def __init__(self, config_path: str, output_dir: str, random_seed: int = None):
+        """
+        Initialize dataset generator.
+        
+        Args:
+            config_path: Path to configuration YAML file
+            output_dir: Output directory for generated dataset
+            random_seed: Random seed for reproducibility
+        """
+        # Load configuration
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        self.output_dir = output_dir
+        self.random_seed = random_seed
+        
+        # Set random seed
+        if random_seed is not None:
+            np.random.seed(random_seed)
+        
+        # Extract key parameters
+        self.sampling_rate = self.config['audio']['sampling_rate']
+        self.bit_depth = self.config['audio']['bit_depth']
+        self.duration = self.config['audio']['duration']
+        
+        # Create output directories
+        self.audio_dir = os.path.join(output_dir, 'audio')
+        self.label_dir = os.path.join(output_dir, 'labels')
+        self.source_dir = os.path.join(output_dir, 'clean_sources')
+        
+        os.makedirs(self.audio_dir, exist_ok=True)
+        os.makedirs(self.label_dir, exist_ok=True)
+        if self.config['generation']['save_clean_sources']:
+            os.makedirs(self.source_dir, exist_ok=True)
+    
+    def _randomize_room_properties(self) -> dict:
+        """
+        Randomize room properties within configured ranges.
+        
+        Returns:
+            Dictionary of room properties
+        """
+        # Use default dimensions or randomize if range provided
+        dimensions = self.config['room']['dimensions']
+        
+        # Randomize RT60 within range
+        rt60_range = self.config['room'].get('rt60_range', [0.10, 0.20])
+        target_rt60 = np.random.uniform(rt60_range[0], rt60_range[1])
+        
+        # Adjust absorption to achieve target RT60 (simplified)
+        # Higher absorption = lower RT60
+        base_absorption = self.config['room']['absorption']['default']
+        scale_factor = 0.15 / target_rt60  # Assuming base RT60 ~ 0.15s
+        absorption = [min(0.95, a * scale_factor) for a in base_absorption]
+        
+        return {
+            'dimensions': dimensions,
+            'absorption': {'default': absorption},
+            'max_order': self.config['room']['max_order']
+        }
+    
+    def _select_random_sources(self) -> list:
+        """
+        Randomly select and configure sound sources.
+        
+        Returns:
+            List of source configuration dictionaries
+        """
+        # Determine number of sources
+        num_range = self.config['sources']['num_sources_range']
+        num_sources = np.random.randint(num_range[0], num_range[1] + 1)
+        
+        # Get enabled source types
+        enabled_types = [
+            src_type for src_type, src_config in self.config['sources']['types'].items()
+            if src_config.get('enabled', True)
+        ]
+        
+        if len(enabled_types) == 0:
+            raise ValueError("No source types are enabled in configuration")
+        
+        # Randomly select source types (with replacement if needed)
+        selected_types = np.random.choice(enabled_types, size=num_sources, replace=True)
+        
+        # Configure each source
+        sources = []
+        for i, src_type in enumerate(selected_types):
+            src_config = self.config['sources']['types'][src_type]
+            
+            # Randomize position within range
+            pos_range = src_config['position_range']
+            position = [
+                np.random.uniform(pos_range['x'][0], pos_range['x'][1]),
+                np.random.uniform(pos_range['y'][0], pos_range['y'][1]),
+                np.random.uniform(pos_range['z'][0], pos_range['z'][1])
+            ]
+            
+            # Randomize volume (SNR)
+            snr_range = self.config['sources']['snr_range']
+            snr_db = np.random.uniform(snr_range[0], snr_range[1])
+            volume = 10 ** (snr_db / 20) * np.random.uniform(0.5, 1.0)
+            
+            sources.append({
+                'id': i,
+                'type': src_type,
+                'position': position,
+                'frequency_range': src_config['frequency_range'],
+                'volume': volume
+            })
+        
+        return sources
+    
+    def generate_single_sample(self, sample_idx: int) -> dict:
+        """
+        Generate a single simulation sample.
+        
+        Args:
+            sample_idx: Index of the sample
+            
+        Returns:
+            Dictionary with generation results
+        """
+        try:
+            clip_id = f"sim_{sample_idx:06d}"
+            
+            # Initialize components
+            mic_array = MicrophoneArray.from_config(self.config['microphone_array'])
+            room_props = self._randomize_room_properties()
+            room_sim = RoomAcousticSimulator(
+                room_dimensions=room_props['dimensions'],
+                mic_array=mic_array,
+                sampling_rate=self.sampling_rate,
+                max_order=room_props['max_order'],
+                absorption=room_props['absorption']
+            )
+            
+            source_generator = NoiseSourceGenerator(self.sampling_rate)
+            mixer = AudioMixer(num_channels=mic_array.num_mics, sampling_rate=self.sampling_rate)
+            
+            # Generate sources
+            source_configs = self._select_random_sources()
+            sources = []
+            source_labels = []
+            
+            for src_config in source_configs:
+                # Generate signal
+                signal = source_generator.generate_source(
+                    source_type=src_config['type'],
+                    duration=self.duration,
+                    frequency_range=src_config['frequency_range'],
+                    volume=src_config['volume']
+                )
+                
+                # Add to room
+                room_sim.add_source(
+                    position=np.array(src_config['position']),
+                    signal=signal
+                )
+                
+                sources.append({
+                    'signal': signal,
+                    'config': src_config
+                })
+                
+                # Calculate orientation
+                distance, azimuth, elevation = mic_array.cartesian_to_spherical(
+                    np.array(src_config['position'])
+                )
+                
+                # Prepare label entry
+                source_label = {
+                    'source_id': src_config['id'],
+                    'label': src_config['type'],
+                    'position_xyz': src_config['position'],
+                    'orientation_az_el': [float(azimuth), float(elevation)],
+                    'distance_m': float(distance)
+                }
+                
+                # Save clean source if configured
+                if self.config['generation']['save_clean_sources']:
+                    source_filename = f"{clip_id}_source_{src_config['id']}_{src_config['type']}.wav"
+                    source_path = os.path.join(self.source_dir, source_filename)
+                    write_audio(source_path, signal, self.sampling_rate, self.bit_depth)
+                    source_label['clean_signal_path'] = source_path
+                
+                source_labels.append(source_label)
+            
+            # Simulate
+            mixed_signal = room_sim.simulate()
+            
+            # Add background noise
+            if self.config['background']['enabled']:
+                mixed_signal = mixer.add_background_noise(
+                    mixed_signal,
+                    noise_level_db=self.config['background']['level'],
+                    noise_type=self.config['background']['type']
+                )
+            
+            # Normalize and trim
+            mixed_signal = mixer.normalize_signal(mixed_signal, target_level_db=-3.0, mode='peak')
+            target_samples = int(self.duration * self.sampling_rate)
+            mixed_signal = mixer.trim_or_pad(mixed_signal, target_samples)
+            
+            # Save mixed audio
+            audio_filename = f"{clip_id}_mixed.wav"
+            audio_path = os.path.join(self.audio_dir, audio_filename)
+            write_audio(audio_path, mixed_signal, self.sampling_rate, self.bit_depth)
+            
+            # Generate and save label
+            label_gen = LabelGenerator(format=self.config['generation']['metadata_format'])
+            label = label_gen.create_label(
+                clip_id=clip_id,
+                audio_filepath=audio_path,
+                sources=source_labels,
+                mic_array_config=mic_array.get_array_info(),
+                room_properties=room_sim.get_room_info(),
+                sampling_rate=self.sampling_rate,
+                bit_depth=self.bit_depth
+            )
+            
+            label_filename = f"{clip_id}_label.{self.config['generation']['metadata_format']}"
+            label_path = os.path.join(self.label_dir, label_filename)
+            label_gen.save_label(label, label_path)
+            
+            return {
+                'success': True,
+                'clip_id': clip_id,
+                'audio_path': audio_path,
+                'label_path': label_path,
+                'num_sources': len(sources)
+            }
+        
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'sample_idx': sample_idx
+            }
+    
+    def generate_dataset(self, num_samples: int = None, num_workers: int = 1):
+        """
+        Generate complete dataset.
+        
+        Args:
+            num_samples: Number of samples to generate (if None, use config)
+            num_workers: Number of parallel workers
+        """
+        if num_samples is None:
+            num_samples = self.config['generation']['num_samples']
+        
+        print("=" * 70)
+        print("Acoustic Dataset Generation")
+        print("=" * 70)
+        print(f"Output directory: {self.output_dir}")
+        print(f"Number of samples: {num_samples}")
+        print(f"Sampling rate: {self.sampling_rate} Hz")
+        print(f"Bit depth: {self.bit_depth} bits")
+        print(f"Duration per sample: {self.duration} seconds")
+        print(f"Parallel workers: {num_workers}")
+        print("=" * 70)
+        
+        # Generate samples
+        print("\nGenerating samples...")
+        results = []
+        
+        if num_workers > 1:
+            # Parallel processing
+            with mp.Pool(num_workers) as pool:
+                results = list(tqdm(
+                    pool.imap(self.generate_single_sample, range(num_samples)),
+                    total=num_samples,
+                    desc="Progress"
+                ))
+        else:
+            # Sequential processing
+            for i in tqdm(range(num_samples), desc="Progress"):
+                results.append(self.generate_single_sample(i))
+        
+        # Analyze results
+        successful = [r for r in results if r['success']]
+        failed = [r for r in results if not r['success']]
+        
+        print("\n" + "=" * 70)
+        print("Generation Summary")
+        print("=" * 70)
+        print(f"Total samples: {num_samples}")
+        print(f"Successful: {len(successful)}")
+        print(f"Failed: {len(failed)}")
+        
+        if failed:
+            print("\nFailed samples:")
+            for f in failed[:10]:  # Show first 10 failures
+                print(f"  - Sample {f['sample_idx']}: {f['error']}")
+        
+        # Create dataset manifest
+        if successful:
+            print("\nCreating dataset manifest...")
+            label_files = [r['label_path'] for r in successful]
+            manifest_path = os.path.join(self.output_dir, 'manifest.json')
+            create_dataset_manifest(self.output_dir, label_files, manifest_path)
+            print(f"Manifest saved to: {manifest_path}")
+        
+        print("\n" + "=" * 70)
+        print("Dataset generation completed!")
+        print("=" * 70)
+        print(f"\nDataset location: {self.output_dir}")
+        print(f"  - Audio files: {self.audio_dir}")
+        print(f"  - Label files: {self.label_dir}")
+        if self.config['generation']['save_clean_sources']:
+            print(f"  - Clean sources: {self.source_dir}")
+        print()
+
+
+def main():
+    """
+    Main entry point for dataset generation script.
+    """
+    parser = argparse.ArgumentParser(
+        description="Generate acoustic simulation dataset for training deep learning models"
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='config/default.yaml',
+        help='Path to configuration YAML file'
+    )
+    parser.add_argument(
+        '--output',
+        type=str,
+        default='output/dataset',
+        help='Output directory for generated dataset'
+    )
+    parser.add_argument(
+        '--num-samples',
+        type=int,
+        default=None,
+        help='Number of samples to generate (overrides config)'
+    )
+    parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=1,
+        help='Number of parallel workers'
+    )
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for reproducibility'
+    )
+    
+    args = parser.parse_args()
+    
+    # Resolve paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, '..', args.config)
+    output_dir = os.path.join(script_dir, '..', args.output)
+    
+    # Create generator
+    generator = DatasetGenerator(
+        config_path=config_path,
+        output_dir=output_dir,
+        random_seed=args.seed
+    )
+    
+    # Generate dataset
+    generator.generate_dataset(
+        num_samples=args.num_samples,
+        num_workers=args.num_workers
+    )
+
+
+if __name__ == "__main__":
+    main()
