@@ -5,7 +5,7 @@ This module simulates acoustic propagation in vehicle cabin environments
 using the Image Source Method (ISM) to model reflections and reverberation.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pyroomacoustics as pra
@@ -55,42 +55,48 @@ class RoomAcousticSimulator:
         self.sampling_rate = int(sampling_rate)
         self.max_order = int(max_order)
 
-        # Normalize absorption input into either scalar or list of floats
-        # default broadband-ish values
-        default_abs = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+        # Normalize absorption input: store either np.ndarray of band values or a float scalar.
+        default_abs = np.array(
+            [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45], dtype=float)
         if absorption is None:
             self.absorption: Any = default_abs
         elif isinstance(absorption, dict):
-            # accept a few common keys; fall back to default list
             for k in ("default", "coeffs", "values", "value"):
                 if k in absorption:
-                    val = absorption[k]
+                    raw = absorption[k]
                     break
             else:
-                val = default_abs
-            self.absorption = list(val) if isinstance(
-                val, (list, tuple, np.ndarray)) else float(val)
+                raw = default_abs
+            if isinstance(raw, (list, tuple, np.ndarray)):
+                self.absorption = np.asarray(raw, dtype=float)
+            else:
+                self.absorption = float(raw)
         elif isinstance(absorption, (list, tuple, np.ndarray)):
-            self.absorption = list(absorption)
+            self.absorption = np.asarray(absorption, dtype=float)
         else:
             self.absorption = float(absorption)
 
         # pyroomacoustics Room object
         self.room: Optional[pra.Room] = None
+        # Map from internal source index -> user provided source_id (if any)
+        self._source_id_map: Dict[int, Any] = {}
         self._create_room()
 
     def _create_room(self):
         """
         Create the pyroomacoustics Room object with specified properties.
         """
-        # Prepare absorption values (either list of floats or scalar)
-        if isinstance(self.absorption, (list, tuple, np.ndarray)):
-            abs_for_material = [max(0.0, min(0.99, float(x))) if np.isfinite(x) else 0.25
-                                for x in self.absorption] or [0.25]
+        # Prepare absorption values (either ndarray of floats or scalar)
+        if isinstance(self.absorption, np.ndarray):
+            # 将非有限值替换为默认值并裁剪到合法区间
+            arr = np.nan_to_num(self.absorption, nan=0.25,
+                                posinf=0.25, neginf=0.25)
+            arr = np.clip(arr, 0.0, 0.99)
+            abs_for_material = arr.tolist() if arr.size > 0 else [0.25]
         else:
             abs_for_material = float(self.absorption)
 
-        # Try to create Material, fallback to scalar mean on any failure
+        # 尝试使用给定参数创建 Material，失败时退回为标量平均值
         try:
             material = pra.Material(abs_for_material)
         except Exception:
@@ -113,7 +119,8 @@ class RoomAcousticSimulator:
         # Add microphone array robustly
         raw_positions = self.mic_array.get_all_positions()
         mp_arr = np.asarray(raw_positions, dtype=float)
-        if mp_arr.ndim != 2 or min(mp_arr.shape) != 3:
+        # Accept either (N,3) or (3,N)
+        if mp_arr.ndim != 2 or (3 not in mp_arr.shape):
             raise ValueError(
                 "get_all_positions() must return a 2D array-like with shape (N,3) or (3,N).")
 
@@ -125,9 +132,10 @@ class RoomAcousticSimulator:
 
         # sanitize and convert: replace non-finite with room center, convert to corner coords, clip
         half = self.room_dimensions / 2.0
-        mp = np.nan_to_num(
-            mp, nan=half[:, None], posinf=half[:, None], neginf=half[:, None])
-        # convert and clip per-column
+        finite_mask = np.isfinite(mp)
+        mp = np.where(finite_mask, mp, half[:, None])
+
+        # convert and clip per-column (保留逐列处理以保持对 _to_room_coords 的兼容)
         for i in range(mp.shape[1]):
             mp[:, i] = np.clip(self._to_room_coords(
                 mp[:, i]), 0.0, self.room_dimensions)
@@ -135,6 +143,16 @@ class RoomAcousticSimulator:
         if mp.shape[1] == 0:
             raise RuntimeError(
                 "No microphone positions available from mic_array.")
+
+        # If mic_array advertises num_mics, ensure consistency with provided positions.
+        if hasattr(self.mic_array, "num_mics"):
+            try:
+                reported = int(self.mic_array.num_mics)
+            except Exception:
+                reported = None
+            if reported is not None and reported != mp.shape[1]:
+                raise ValueError(
+                    f"mic_array.num_mics ({reported}) does not match number of positions provided ({mp.shape[1]}).")
 
         pra_mic_array = pra.MicrophoneArray(mp, fs=self.sampling_rate)
         self.room.add_microphone_array(pra_mic_array)
@@ -160,7 +178,11 @@ class RoomAcousticSimulator:
         # pyroomacoustics expects 3-element sequence
         self.room.add_source(
             pos_room.tolist(), signal=np.asarray(signal, dtype=float))
-        return len(self.room.sources) - 1
+        idx = len(self.room.sources) - 1
+        # 记录用户指定的 source_id（如果有）
+        if source_id is not None:
+            self._source_id_map[idx] = source_id
+        return idx
 
     def _is_position_valid(self, position: np.ndarray) -> bool:
         """
@@ -212,7 +234,7 @@ class RoomAcousticSimulator:
         mic_signals = self.room.mic_array.signals
         return np.asarray(mic_signals)
 
-    def get_rir_for_source(self, source_index: int) -> List[np.ndarray]:
+    def get_rir_for_source(self, source_index: int) -> Union[np.ndarray, List[np.ndarray]]:
         """
         Return per-microphone RIRs for a given source index.
         """
@@ -225,12 +247,11 @@ class RoomAcousticSimulator:
 
         rirs_for_source = [self.room.rir[m][source_index]
                            for m in range(len(self.room.rir))]
-        # 如果所有 RIR 都是 ndarray 并且长度一致，则返回堆叠后的 ndarray（更容易直接用于后续处理）
+        # 如果所有 RIR 都是 ndarray 并且长度一致，则返回堆叠后的 ndarray（便于后续处理）
         if all(isinstance(r, np.ndarray) for r in rirs_for_source):
             lengths = {r.shape[0] for r in rirs_for_source}
             if len(lengths) == 1:
                 return np.vstack(rirs_for_source)
-        # 否则保持按通道列表返回
         return rirs_for_source
 
     def calculate_rt60(self) -> float:
@@ -238,15 +259,16 @@ class RoomAcousticSimulator:
         Estimate RT60 using Sabine's formula: RT60 = 0.161 * V / A
         """
         volume = float(np.prod(self.room_dimensions))
-        # total surface area = 2*(lw + lh + wh)
         total_area = 2.0 * (self.room_dimensions[0] * self.room_dimensions[1] +
                             self.room_dimensions[0] * self.room_dimensions[2] +
                             self.room_dimensions[1] * self.room_dimensions[2])
-        avg_absorption = float(np.mean(self.absorption)) if hasattr(
-            self.absorption, "__len__") else float(self.absorption)
-        # 避免除以 0 或非常小的值
+        # 根据 absorption 的类型计算平均吸收系数
+        if isinstance(self.absorption, np.ndarray):
+            avg_absorption = float(np.mean(self.absorption))
+        else:
+            avg_absorption = float(self.absorption)
         effective_abs = max(1e-6, avg_absorption)
-        rt60 = 0.161 * volume / (total_area * effective_abs + 1e-9)
+        rt60 = 0.161 * volume / (total_area * effective_abs)
         return float(rt60)
 
     def reset(self):
@@ -259,7 +281,7 @@ class RoomAcousticSimulator:
         """
         Return room metadata dict.
         """
-        return {
+        info = {
             "dimensions": self.room_dimensions.tolist(),
             "volume_m3": float(np.prod(self.room_dimensions)),
             "sampling_rate": self.sampling_rate,
@@ -269,6 +291,10 @@ class RoomAcousticSimulator:
             "num_sources": len(self.room.sources) if self.room else 0,
             "num_microphones": int(self.mic_array.num_mics)
         }
+        # 添加可选的 source id 映射，便于追踪用户外部 id
+        if self._source_id_map:
+            info["source_id_map"] = dict(self._source_id_map)
+        return info
 
     @classmethod
     def from_config(

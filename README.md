@@ -1,18 +1,11 @@
 # Acoustic Simulation Framework
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-green)](#)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#) [![Python](https://img.shields.io/badge/Python-3.8%2B-green)](#) [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
 
-> 高度可配置的 Python 声学仿真框架，用于生成用于车内噪声定位与分离模型的合成训练数据（8 通道，48kHz，24-bit）。
+> 高度可配置的 Python 声学仿真框架，用于生成车内噪声定位与分离模型的合成训练数据（8 通道，48kHz，24-bit）。
 
----
-
-## TL;DR
-
-- 自动生成大量带像素级真值（位置、方向、干净信号）的合成音频样本  
-- 可配置车舱声学、麦克风阵列、多个并发声源与频域/时域特性  
-- 输出：8 通道 WAV、单声源干净信号、JSON/YAML 标签
+<!-- Hero / 概览 -->
+简洁、可扩展的合成音频数据生成器，支持复杂车舱声学、多个并发噪声源与精确标签输出（WAV + JSON/YAML）。
 
 ---
 
@@ -32,17 +25,17 @@
 
 ## 主要特性
 
-- 多达 8+ 类型的噪声源（发动机、道路、风噪、HVAC、马达嗡嗡、BSR、语音、提示音）
-- 并发多源（支持 3+ 并发）与频谱/时域可控
-- 车舱几何与材料频率相关吸声特性
-- 基于 Image Source Method 的 RIR（可调反射阶数）
-- 输出：8 通道 WAV（48kHz/24-bit）+ 完整标签（位置、方位、干净信号路径等）
+- 支持多种噪声源类型：发动机、道路、风噪、HVAC、马达嗡嗡、BSR、语音、提示音等。  
+- 并发多源仿真（>=3），可控频域/时域特性。  
+- 车舱几何与频率相关的材料吸声模型。  
+- 基于 Image Source Method 的 RIR（可配置反射阶数与 RT60）。  
+- 输出：多通道（8ch）WAV（48kHz/24-bit）+ 每个样本的像素级真值标签（位置、方位、干净信号路径等）。
 
 ---
 
 ## 快速开始
 
-1. 克隆代码并安装依赖：
+克隆并安装：
 
 ```bash
 git clone https://github.com/yourusername/acoustic-sim-framework.git
@@ -52,19 +45,13 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-2. 运行单次仿真示例（验证安装）：
+运行示例（验证安装）：
 
 ```bash
 python examples/run_simulation_example.py
 ```
 
-输出示例：
-
-- `output/example/example_001_mixed.wav` (8ch mixed)
-- `output/example/example_001_source_*.wav` (clean sources)
-- `output/example/example_001_label.json`
-
-3. 批量生成数据集：
+批量生成数据集示例：
 
 ```bash
 python scripts/generate_dataset.py \
@@ -75,11 +62,17 @@ python scripts/generate_dataset.py \
   --seed 42
 ```
 
+示例输出（示意）：
+
+- `output/example/example_001_mixed.wav` — 8ch 混合信号  
+- `output/example/example_001_source_*.wav` — 干净源信号  
+- `output/example/example_001_label.json` — 标签文件
+
 ---
 
 ## 配置说明（示例片段）
 
-关键配置位于 `config/default.yaml`，示例：
+关键配置位于 `config/default.yaml`。以下为常用字段示例（保持原始含义）：
 
 ```yaml
 audio:
@@ -101,6 +94,8 @@ room:
   max_order: 15
   rt60_range: [0.10, 0.20]
 ```
+
+提示：根据目标场景调节 `rt60_range`、`max_order` 与麦克风阵列位置以获得物理上合理的 RIR。
 
 ---
 
@@ -221,19 +216,30 @@ mixed_audio = room_sim.simulate()
 
 ## 测试与质量保证
 
-- 单元测试：`python -m pytest tests/`
-- 验证策略：
-  1. 物理验证：与真实录音比较光谱与空间特征
-  2. 模型验证：在合成数据上训练基线模型并在真实数据上测试
-  3. 混合训练：合成 + 真实数据混合以提高泛化
+- 单元测试：`python -m pytest tests/`  
+- 验证策略（建议）：
+  1. 物理验证：与真实录音比较光谱与空间特征。  
+  2. 模型验证：在合成数据上训练基线模型并在真实数据上测试。  
+  3. 混合训练：合成 + 真实数据混合以提高泛化。  
+
+常见故障排查（缺少 pytest 举例）：
+
+```bash
+# 若出现: No module named pytest
+pip install pytest
+# 或将 pytest 加入 requirements.txt 然后:
+pip install -r requirements.txt
+```
+
+提示：确保在 CI 中也安装开发依赖（pytest）以保证测试一致性。
 
 ---
 
 ## 贡献
 
-1. Fork 仓库
-2. 新建分支：`git checkout -b feature/your-feature`
-3. 提交并推 PR
+1. Fork 仓库  
+2. 新建分支：`git checkout -b feature/your-feature`  
+3. 提交并发起 Pull Request  
 
 ---
 
@@ -243,8 +249,8 @@ MIT License — 详情请查看 LICENSE 文件。
 
 ---
 
-如果需要，我可以：
+如需我可以：
 
-- 将部分内容翻译为中文或双语版本；
-- 添加示例输出图片（提供路径或样例图片即可）；
-- 根据演示场景裁剪 README（如简洁版或教学版）。
+- 提供中文/英文双语版本（按需），
+- 添加示例波形或声场可视化图片（请提供图片路径），
+- 制作简洁教学版 README（用于演示幻灯片或 Workshop）。
