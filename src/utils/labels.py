@@ -7,10 +7,13 @@ for simulated acoustic data.
 
 import json
 import logging
+import math
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -39,8 +42,6 @@ class LabelGenerator:
             raise ValueError(
                 f"Unsupported format: {format}. Use 'json' or 'yaml'")
         self.format = format
-        # 兼容别名，便于外部使用更明确的名称
-        self.output_format = self.format
 
     def create_label(
         self,
@@ -91,15 +92,47 @@ class LabelGenerator:
 
         return label
 
-    # 新增：递归序列化辅助方法，将 Path -> str（并保持其它基本结构不变）
+    # serialize helper: convert Paths, numpy types, bytes, etc. into JSON/YAML-friendly types
     def _serialize_for_output(self, obj: Any) -> Any:
+        # Path -> str
         if isinstance(obj, Path):
             return str(obj)
+
+        # numpy ndarray -> recurse via list
+        if isinstance(obj, np.ndarray):
+            return self._serialize_for_output(obj.tolist())
+
+        # numpy scalar -> native python using item()
+        if isinstance(obj, np.generic):
+            val = obj.item()
+            # For floats, guard NaN/inf
+            if isinstance(val, float) and not math.isfinite(val):
+                return None
+            return val
+
+        # bytes -> utf-8 string fallback to str()
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                return obj.decode("utf-8")
+            except Exception:
+                return str(obj)
+
+        # dict / list / tuple -> recurse
         if isinstance(obj, dict):
             return {k: self._serialize_for_output(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             return [self._serialize_for_output(v) for v in obj]
-        return obj
+
+        # basic python types (guard floats)
+        if isinstance(obj, float):
+            if not math.isfinite(obj):
+                return None
+            return obj
+        if isinstance(obj, (str, int, bool, type(None))):
+            return obj
+
+        # fallback: string representation
+        return str(obj)
 
     def save_label(
         self,
@@ -127,14 +160,21 @@ class LabelGenerator:
 
         label_to_write = self._serialize_for_output(label)
 
-        # Write label file
+        # Write label file atomically: create temp file next to target then replace
+        # use name-based tmp to avoid odd behaviors with empty suffix
+        temp_out = out_p.with_name(out_p.name + ".tmp")
         if self.format == "json":
-            with out_p.open("w", encoding="utf-8") as f:
+            with temp_out.open("w", encoding="utf-8") as f:
                 json.dump(label_to_write, f, indent=2, ensure_ascii=False)
         else:
-            with out_p.open("w", encoding="utf-8") as f:
-                yaml.dump(label_to_write, f,
-                          default_flow_style=False, allow_unicode=True)
+            with temp_out.open("w", encoding="utf-8") as f:
+                yaml.safe_dump(label_to_write, f, default_flow_style=False,
+                               allow_unicode=True, sort_keys=False)
+        try:
+            os.replace(str(temp_out), str(out_p))
+        except Exception:
+            if temp_out.exists():
+                temp_out.rename(out_p)
 
     def load_label(self, label_path: Union[str, Path]) -> Dict[str, Any]:
         """
@@ -160,6 +200,15 @@ class LabelGenerator:
                 label = yaml.safe_load(f)
         else:
             raise ValueError(f"Unknown label file format: {label_path}")
+
+        # Guard against empty YAML/JSON files which may return None
+        if label is None:
+            label = {}
+        elif not isinstance(label, dict):
+            # Ensure we return a dict for downstream consumers; if not, log and wrap
+            logger.warning(
+                "Label file %s did not contain a mapping at top-level; wrapping into dict", label_path)
+            label = {"__value__": label}
 
         return label
 
@@ -282,12 +331,16 @@ def create_dataset_manifest(
     for label_file in label_files:
         try:
             label = label_gen.load_label(label_file)
+            if not isinstance(label, dict):
+                logger.warning(
+                    "Skipping non-mapping label from %s", label_file)
+                continue
             clip_id = label.get("clip_id")
             if clip_id is None:
                 logger.warning("Missing clip_id in %s", label_file)
             manifest["samples"].append({
                 "clip_id": clip_id,
-                "label_path": str(label_file),
+                "label_path": str(Path(label_file)),
                 "audio_path": label.get("audio_filepath"),
                 "num_sources": len(label.get("sources", [])),
                 "source_types": [s.get("label") for s in label.get("sources", [])]
@@ -328,6 +381,10 @@ def extract_source_statistics(label_files: List[Union[str, Path]]) -> Dict[str, 
     for label_file in label_files:
         try:
             label = label_gen.load_label(label_file)
+            if not isinstance(label, dict):
+                logger.warning(
+                    "Skipping non-mapping label from %s", label_file)
+                continue
 
             for source in label.get("sources", []):
                 # Validate position_xyz is usable
